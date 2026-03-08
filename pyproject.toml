@@ -1,0 +1,59 @@
+[project]
+name = "nvue-automation"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Itachi_Chen",email = "Itachi_Chen@wistron.com"}
+]
+readme = "README.md"
+requires-python = ">=3.11,<4.0"
+dependencies = [
+    "httpx (>=0.28.1,<0.29.0)",
+    "loguru (>=0.7.3,<0.8.0)",
+    "python-dotenv (>=1.2.1,<2.0.0)",
+    "orjson (>=3.11.7,<4.0.0)",
+    "fastapi[standard] (>=0.135.1,<0.136.0)",
+    "pydantic (>=2.12.5,<3.0.0)"
+]
+
+[tool.poetry]
+packages = [{include = "nvue_automation", from = "src"}]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[dependency-groups]
+dev = [
+    "ruff (>=0.15.1,<0.16.0)",
+    "pylint (>=4.0.4,<5.0.0)"
+]
+
+[tool.ruff]
+exclude = ["build"]
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "B",   # flake8-bugbear
+    "C",   # flake8-comprehensions
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "SIM", # flake8-simplify
+    "UP",  # pyupgrade
+    "W",   # pycodestyle warnings
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401", "F403"]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+
+[tool.pytest.ini_options]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.poetry.scripts]
+start-api = "nvue_automation.main:start"
