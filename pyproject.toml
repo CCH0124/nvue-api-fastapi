@@ -3,7 +3,7 @@ name = "nvue-automation"
 version = "0.1.0"
 description = ""
 authors = [
-    {name = "Itachi_Chen",email = "Itachi_Chen@wistron.com"}
+    {name = "CCH",email = "cchong0124@gmail.com"}
 ]
 readme = "README.md"
 requires-python = ">=3.11,<4.0"
