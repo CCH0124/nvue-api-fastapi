@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Response
+from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Path
 from fastapi import Query
+from fastapi import Response
 from fastapi import status
 from fastapi.responses import JSONResponse
 from loguru import logger
@@ -14,13 +15,14 @@ from nvue_automation.core.exceptions import NVUEAPIError
 from nvue_automation.models.schemas import ApplyOptions
 from nvue_automation.models.schemas import ConfigApplyRequest
 from nvue_automation.models.schemas import ConfigResponse
+from nvue_automation.models.schemas import ConfirmRequest
 from nvue_automation.models.schemas import ErrorResponse
 from nvue_automation.models.schemas import GenericResponse
 from nvue_automation.models.schemas import RevisionState
 from nvue_automation.models.schemas import RollbackRequest
 from nvue_automation.services.nvue_service import AsyncNVUEService
 
-router = APIRouter(prefix="/api/v1", tags=["Configuration"])
+router = APIRouter(prefix="/api/v1/config", tags=["Configuration"])
 
 
 async def get_nvue_service():
@@ -33,7 +35,7 @@ async def get_nvue_service():
 
 
 @router.put(
-    "/config/deploy",
+    "/deploy",
     tags=["Configuration"],
     response_model=GenericResponse,
     status_code=status.HTTP_201_CREATED,
@@ -45,11 +47,11 @@ async def get_nvue_service():
     3. Apply new configuration
     4. Commit changes
     5. Verify application status
-    
+
     **Safety Features**:
     - `message`: Add a commit message for tracking changes
     - `confirm_timeout`: Require manual confirmation within N seconds, or auto-rollback (useful for critical changes)
-    
+
     **Note**: This operation will delete all existing configuration under the path. Please confirm before using.
     """,
     responses={
@@ -68,17 +70,13 @@ async def replace_config_and_deploy(request: ConfigApplyRequest, service: AsyncN
         logger.debug(f"[API] Replace request details | path={request.path} | has_options={options is not None}")
         revision_info = await service.config_replace(path=request.path, payload=request.payload, options=options)
 
-        # Get revision ID: prefer _changeset (always present), fallback to last-apply
-        rev_id = revision_info.get("_changeset") or revision_info.get("last-apply", {}).get("rev_id")
-        parent_rev_id = revision_info.get("additional-data", {}).get("parent-revision-id")
-        revision_info.pop("_changeset", None)  # Remove _changeset from data to avoid confusion
-        logger.info(f"[API] Replace deployed successfully | path={request.path} | revision={rev_id}")
+        logger.info(f"[API] Replace deployed successfully | path={request.path} | revision={revision_info.rev_id}")
         return GenericResponse(
             success=True,
             message="Configuration deployed and verified successfully.",
-            revision=rev_id,
-            parent_revision=parent_rev_id,
-            data=revision_info,
+            revision=revision_info.rev_id,
+            parent_revision=revision_info.parent_rev_id,
+            data=revision_info.model_dump(),
         )
     except NVUEAPIError as e:
         logger.warning(f"[API] NVUE API error | path={request.path} | status={e.status_code} | detail={e.detail}")
@@ -89,7 +87,7 @@ async def replace_config_and_deploy(request: ConfigApplyRequest, service: AsyncN
 
 
 @router.patch(
-    "/config/deploy",
+    "/deploy",
     tags=["Configuration"],
     response_model=GenericResponse,
     status_code=status.HTTP_201_CREATED,
@@ -100,11 +98,11 @@ async def replace_config_and_deploy(request: ConfigApplyRequest, service: AsyncN
     2. Merge new configuration with existing configuration (incremental update)
     3. Commit changes
     4. Verify application status
-    
+
     **Safety Features**:
     - `message`: Add a commit message for tracking changes
     - `confirm_timeout`: Require manual confirmation within N seconds, or auto-rollback (useful for critical changes)
-    
+
     **Use Case**: Set or unset specific configuration items without affecting other configurations under the path.
     """,
     responses={
@@ -134,17 +132,13 @@ async def merge_config_and_deploy(request: ConfigApplyRequest, service: AsyncNVU
         logger.debug(f"[API] Merge request details | path={request.path} | has_options={request.options is not None}")
         revision_info = await service.config_merge(path=request.path, payload=request.payload, options=request.options)
 
-        # Get revision ID: prefer _changeset (always present), fallback to last-apply
-        rev_id = revision_info.get("_changeset") or revision_info.get("last-apply", {}).get("rev_id")
-        parent_rev_id = revision_info.get("additional-data", {}).get("parent-revision-id")
-        revision_info.pop("_changeset", None)  # Remove _changeset from data to avoid confusion
-        logger.info(f"[API] Merge deployed successfully | path={request.path} | revision={rev_id}")
+        logger.info(f"[API] Merge deployed successfully | path={request.path} | revision={revision_info.rev_id}")
         return GenericResponse(
             success=True,
             message="Configuration deployed and verified successfully.",
-            revision=rev_id,
-            parent_revision=parent_rev_id,
-            data=revision_info,
+            revision=revision_info.rev_id,
+            parent_revision=revision_info.parent_rev_id,
+            data=revision_info.model_dump(exclude_computed_fields=True),
         )
     except NVUEAPIError as e:
         logger.warning(f"[API] NVUE API error | path={request.path} | status={e.status_code} | detail={e.detail}")
@@ -158,7 +152,7 @@ async def merge_config_and_deploy(request: ConfigApplyRequest, service: AsyncNVU
 
 
 @router.post(
-    "/config/{changeset}/rollback",
+    "/{changeset}/rollback",
     tags=["Configuration"],
     response_model=GenericResponse,
     status_code=status.HTTP_201_CREATED,
@@ -169,6 +163,7 @@ async def merge_config_and_deploy(request: ConfigApplyRequest, service: AsyncNVU
     responses={
         201: {"description": "Successfully rolled back to specified version", "model": GenericResponse},
         400: {"description": "Specified revision ID does not exist or is invalid", "model": ErrorResponse},
+        404: {"description": "Specified revision ID not found", "model": ErrorResponse},
         500: {"description": "Internal server error or NVUE API error", "model": ErrorResponse},
     },
 )
@@ -196,20 +191,18 @@ async def rollback_config(
     try:
         # Build options from request body (if provided)
         options = options.to_apply_options() if options else ApplyOptions()
-        logger.debug(f"[API] Rollback request | target_changeset={changeset} | has_custom_options={options is not None}")
+        logger.debug(
+            f"[API] Rollback request | target_changeset={changeset} | has_custom_options={options is not None}"
+        )
         revision_info = await service.config_rollback(changeset=changeset, options=options)
 
-        # Get revision ID: prefer _changeset, fallback to last-apply, final fallback to changeset parameter
-        rev_id = revision_info.get("_changeset") or revision_info.get("last-apply", {}).get("rev_id")
-        parent_rev_id = revision_info.get("additional-data", {}).get("parent-revision-id")
-
-        logger.info(f"[API] Rollback completed | target_changeset={changeset} | revision={rev_id}")
+        logger.info(f"[API] Rollback completed | target_changeset={changeset} | revision={revision_info.rev_id}")
         return GenericResponse(
             success=True,
             message=f"Configuration rolled back to revision '{changeset}' successfully.",
-            revision=rev_id,
-            parent_revision=parent_rev_id,
-            data=revision_info,
+            revision=revision_info.rev_id,
+            parent_revision=revision_info.parent_rev_id,
+            data=revision_info.model_dump(exclude_computed_fields=True),
         )
     except NVUEAPIError as e:
         # Let exception propagate to global handler, return complete error info (including validation)
@@ -221,18 +214,216 @@ async def rollback_config(
 
 
 @router.post(
-    "/config/{changeset}/apply",
+    "/{changeset}/confirm",
+    tags=["Configuration"],
+    response_model=GenericResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Confirm the apply, keeping it.",
+    description="""
+    Confirm a confirm_during configuration that was applied with a confirm timeout.
+
+    This endpoint is used to explicitly confirm configuration changes that are waiting
+    for user confirmation. When you apply a configuration with `confirm_timeout`, the
+    system waits for manual confirmation within the specified timeout period. Use this
+    endpoint to confirm the changes and prevent automatic rollback.
+
+    **Workflow**:
+    1. Deploy configuration with `confirm_timeout` (e.g., 300 seconds)
+    2. Test the configuration changes
+    3. Call this endpoint to confirm within the timeout period
+    4. Configuration becomes permanently applied
+
+    **Note**: If not confirmed within timeout, the configuration will automatically rollback.
+    """,
+    responses={
+        200: {"description": "Configuration successfully confirmed", "model": GenericResponse},
+        202: {
+            "description": "Specified changeset is already in final state - no action needed",
+            "model": GenericResponse,
+        },
+        400: {
+            "description": "Specified changeset does not exist or is not in confirmable state",
+            "model": ErrorResponse,
+        },
+        404: {"description": "Specified revision ID not found", "model": ErrorResponse},
+        500: {"description": "Internal server error or NVUE API error", "model": ErrorResponse},
+    },
+)
+async def confirm_config(
+    changeset: str = Path(..., description="Changeset ID (revision number) to confirm"),
+    request: ConfirmRequest | None = None,
+    service: AsyncNVUEService = Depends(get_nvue_service),
+):
+    """
+    Confirm a confirm_during configuration changeset.
+
+    Args:
+        changeset: The changeset ID to confirm
+        request: Optional request body with commit message
+        service: NVUE service dependency injection
+
+    Returns:
+        GenericResponse: Contains confirmation status and revision information
+
+    Raises:
+        NVUEAPIError: NVUE API related errors
+        HTTPException: Other server errors
+    """
+    logger.info(f"[API] POST /config/{changeset}/confirm")
+    try:
+        message = request.message if request else None
+        logger.debug(f"[API] Confirm request | changeset={changeset} | has_message={message is not None}")
+
+        revision_info = await service.config_confirm(changeset=changeset, message=message)
+
+        if revision_info.state in (
+            RevisionState.APPLIED_AND_SAVED.value,
+            RevisionState.CONFIRM_FAIL.value,
+            RevisionState.DETACHED.value,
+        ):
+            logger.info(
+                f"[API] Changeset already in final state | changeset={changeset} | state={revision_info.state} | "
+                f"status_code=202"
+            )
+            return JSONResponse(
+                status_code=202,
+                content=GenericResponse(
+                    success=True,
+                    message=f"Changeset '{changeset}' is already in '{revision_info.state}' state. No action taken.",
+                    revision=changeset,
+                    parent_revision=revision_info.parent_rev_id,
+                    data=revision_info.model_dump(exclude_computed_fields=True),
+                ).model_dump(),
+            )
+
+        logger.info(f"[API] Configuration confirmed | changeset={changeset} | state={revision_info.state}")
+        return GenericResponse(
+            success=True,
+            message=f"Configuration changeset '{changeset}' confirmed successfully.",
+            revision=changeset,
+            parent_revision=revision_info.parent_rev_id,
+            data=revision_info.model_dump(exclude_computed_fields=True),
+        )
+    except NVUEAPIError as e:
+        logger.warning(f"[API] NVUE API error during confirm | changeset={changeset} | status={e.status_code}")
+        raise
+    except Exception as e:
+        logger.error(f"[API] Confirm failed | changeset={changeset} | error={type(e).__name__}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to confirm changeset '{changeset}': {str(e)}") from e
+
+
+@router.post(
+    "/{changeset}/reject",
+    tags=["Configuration"],
+    response_model=GenericResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Roll back the unconfirmed apply now.",
+    description="""
+    Reject a confirm_during configuration that was applied with a confirm error, triggering immediate rollback.
+
+    This endpoint is used to explicitly reject configuration changes that are waiting
+    for user confirmation. When you apply a configuration with `confirm_timeout`, you can
+    use this endpoint to immediately rollback the changes without waiting for the timeout.
+
+    **Workflow**:
+    1. Deploy configuration with `confirm_timeout` (e.g., 300 seconds)
+    2. Test the configuration changes
+    3. If issues detected, call this endpoint to immediately rollback
+    4. Configuration is rolled back to previous state
+
+    **Use Case**: When testing reveals issues and you want to rollback immediately rather than
+    waiting for automatic timeout rollback.
+    """,
+    responses={
+        200: {"description": "Configuration successfully rejected and rolled back", "model": GenericResponse},
+        202: {
+            "description": "Specified changeset is already in final state - no action needed",
+            "model": GenericResponse,
+        },
+        400: {
+            "description": "Specified changeset does not exist or is not in rejectable state",
+            "model": ErrorResponse,
+        },
+        404: {"description": "Specified revision ID not found", "model": ErrorResponse},
+        500: {"description": "Internal server error or NVUE API error", "model": ErrorResponse},
+    },
+)
+async def reject_config(
+    changeset: str = Path(..., description="Changeset ID (revision number) to reject"),
+    request: ConfirmRequest | None = None,
+    service: AsyncNVUEService = Depends(get_nvue_service),
+):
+    """
+    Reject a pending configuration changeset, triggering rollback.
+
+    Args:
+        changeset: The changeset ID to reject
+        request: Optional request body with commit message
+        service: NVUE service dependency injection
+
+    Returns:
+        GenericResponse: Contains rejection/rollback status and revision information
+
+    Raises:
+        NVUEAPIError: NVUE API related errors
+        HTTPException: Other server errors
+    """
+    logger.info(f"[API] POST /config/{changeset}/reject")
+    try:
+        message = request.message if request else None
+        logger.debug(f"[API] Reject request | changeset={changeset} | has_message={message is not None}")
+
+        revision_info = await service.config_reject(changeset=changeset, message=message)
+
+        if revision_info.state in (
+            RevisionState.APPLIED_AND_SAVED.value,
+            RevisionState.CONFIRM_FAIL.value,
+            RevisionState.DETACHED.value,
+        ):
+            logger.info(
+                f"[API] Changeset already in final state | changeset={changeset} | state={revision_info.state} | "
+                f"status_code=202"
+            )
+            return JSONResponse(
+                status_code=202,
+                content=GenericResponse(
+                    success=True,
+                    message=f"Changeset '{changeset}' is already in '{revision_info.state}' state. No action taken.",
+                    revision=changeset,
+                    parent_revision=revision_info.parent_rev_id,
+                    data=revision_info.model_dump(exclude_computed_fields=True),
+                ).model_dump(),
+            )
+
+        logger.warning(f"[API] Configuration rejected | changeset={changeset} | state={revision_info.state}")
+        return GenericResponse(
+            success=True,
+            message=f"Configuration changeset '{changeset}' rejected and rolled back successfully.",
+            revision=changeset,
+            parent_revision=revision_info.parent_rev_id,
+            data=revision_info.model_dump(exclude_computed_fields=True),
+        )
+    except NVUEAPIError as e:
+        logger.warning(f"[API] NVUE API error during reject | changeset={changeset} | status={e.status_code}")
+        raise
+    except Exception as e:
+        logger.error(f"[API] Reject failed | changeset={changeset} | error={type(e).__name__}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to reject changeset '{changeset}': {str(e)}") from e
+
+
+@router.post(
+    "/{changeset}/apply",
     tags=["Configuration"],
     response_model=GenericResponse,
     summary="Apply Configuration Changeset",
     description="""
     Apply a pending configuration changeset to become the applied configuration.
-    
+
     This endpoint applies the specified pending revision, making it the active configuration.
     Equivalent to the `nv config apply` command.
-    
+
     **Use Case**: Apply a previously created revision that is in pending state.
-    
+
     **Response Codes**:
     - 201: Configuration successfully applied and saved
     - 202: Configuration already in final state (applied_and_saved, confirm_fail, or detached) - no action taken
@@ -244,11 +435,13 @@ async def rollback_config(
             "description": "Specified changeset ID does not exist or is not in pending state",
             "model": ErrorResponse,
         },
+        404: {"description": "Specified revision ID not found", "model": ErrorResponse},
         500: {"description": "Internal server error or NVUE API error", "model": ErrorResponse},
     },
 )
 async def apply_and_save_changeset(
     changeset: str = Path(..., description="Changeset ID (revision number) to apply"),
+    request: ConfirmRequest | None = None,
     service: AsyncNVUEService = Depends(get_nvue_service),
 ):
     """
@@ -260,7 +453,7 @@ async def apply_and_save_changeset(
 
     Returns:
         GenericResponse: Contains application status and revision information
-        
+
     Response Status:
         - 201: Configuration successfully applied
         - 202: Configuration already in final state (no action taken)
@@ -272,38 +465,36 @@ async def apply_and_save_changeset(
     logger.info(f"[API] POST /config/{changeset}/apply")
     try:
         logger.debug(f"[API] Apply/save changeset request | changeset={changeset}")
-        apply_result = await service.config_save(changeset=changeset)
-        parent_rev_id = apply_result.get("additional-data", {}).get("parent-revision-id")
-        current_state = apply_result.get("state")
-        
+        apply_result = await service.config_save(changeset=changeset, message=request.message if request else None)
+
         # Check if configuration is already in a final state
-        if current_state in (
+        if apply_result.state in (
             RevisionState.APPLIED_AND_SAVED.value,
             RevisionState.CONFIRM_FAIL.value,
             RevisionState.DETACHED.value,
         ):
             logger.info(
-                f"[API] Changeset already in final state | changeset={changeset} | state={current_state} | "
+                f"[API] Changeset already in final state | changeset={changeset} | state={apply_result.state} | "
                 f"status_code=202"
             )
             return JSONResponse(
                 status_code=202,
                 content=GenericResponse(
                     success=True,
-                    message=f"Changeset '{changeset}' is already in '{current_state}' state. No action taken.",
+                    message=f"Changeset '{changeset}' is already in '{apply_result.state}' state. No action taken.",
                     revision=changeset,
-                    parent_revision=parent_rev_id,
-                    data=apply_result,
+                    parent_revision=apply_result.parent_rev_id,
+                    data=apply_result.model_dump(exclude_computed_fields=True),
                 ).model_dump(),
             )
-        
-        logger.info(f"[API] Changeset applied and saved | changeset={changeset} | state={current_state}")
+
+        logger.info(f"[API] Changeset applied and saved | changeset={changeset} | state={apply_result.state}")
         return GenericResponse(
             success=True,
             message=f"Changeset '{changeset}' applied successfully.",
             revision=changeset,
-            parent_revision=parent_rev_id,
-            data=apply_result,
+            parent_revision=apply_result.parent_rev_id,
+            data=apply_result.model_dump(exclude_computed_fields=True),
         )
     except NVUEAPIError as e:
         logger.warning(f"[API] NVUE API error during apply | changeset={changeset} | status={e.status_code}")
@@ -314,13 +505,13 @@ async def apply_and_save_changeset(
 
 
 @router.get(
-    "/config/revisions",
+    "/revisions",
     tags=["Configuration"],
     response_model=ConfigResponse,
     summary="Get Configuration History",
     description="""
     Get configuration history. Optionally specify a specific revision ID to query the configuration content of that version.
-    
+
     - **Without parameters**: Returns a list of all historical versions
     - **With changeset parameter**: Returns detailed configuration content of the specified version
     """,
@@ -348,7 +539,7 @@ async def get_config_history(
 
 
 @router.get(
-    "/config/find",
+    "/find",
     tags=["Configuration"],
     response_model=ConfigResponse,
     summary="Search Configuration",
@@ -396,7 +587,7 @@ async def search_config(
 
 
 @router.get(
-    "/config",
+    "/",
     tags=["Configuration"],
     response_model=ConfigResponse,
     summary="Get All Current Configuration",
@@ -428,18 +619,18 @@ async def get_current_config(service: AsyncNVUEService = Depends(get_nvue_servic
 
 
 @router.get(
-    "/config/diff/{resource:path}",
+    "/diff/{resource:path}",
     tags=["Configuration"],
     response_model=ConfigResponse,
     summary="Get Configuration Diff",
     description="""
     Compare differences between two configuration versions.
-    
+
     **Parameter Description**:
     - `resource`: Configuration path to compare (e.g., `/interface`, `/system`)
     - `base_changeset`: Base version (default: `applied` - currently applied configuration)
     - `target_changeset`: Target version (default: `empty` - empty configuration)
-    
+
     **Common Combinations**:
     - `applied` vs `empty`: View differences between current configuration and initial state
     - `applied` vs `[revision_id]`: View differences between current configuration and specific historical version
@@ -488,19 +679,19 @@ async def get_config_diff(
 
 
 @router.get(
-    "/config/{path:path}",
+    "/{path:path}",
     tags=["Configuration"],
     response_model=ConfigResponse,
     summary="Get Configuration by Path",
     description="""
     Get current configuration information at the specified path.
-    
+
     **Path Examples**:
     - `/interface` - Get all interface configurations
     - `/interface/swp1` - Get specific interface configuration
     - `/system` - Get system configuration
     - `/router/bgp` - Get BGP routing configuration
-    
+
     **Tip**: Use the `/config/find` endpoint to find available configuration paths.
     """,
     responses={

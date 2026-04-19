@@ -4,7 +4,7 @@ from pydantic_settings import SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """應用程式配置，封裝所有環境變數與全域設定"""
+    """application settings"""
 
     base_url: str = Field(default="https://127.0.0.1:443/nvue_v1", alias="NVUE_BASE_URL")
     username: str = Field(default="admin", alias="NVUE_USERNAME")

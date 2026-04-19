@@ -9,6 +9,8 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 
 from nvue_automation.api.v1.endpoints import router as api_v1_router
+from nvue_automation.api.v1.resources import platform
+from nvue_automation.api.v1.resources import system
 from nvue_automation.config.logging import setup_logging
 from nvue_automation.config.settings import Settings
 from nvue_automation.core.exceptions import NVUEAPIError
@@ -21,7 +23,7 @@ async def lifespan(app: FastAPI):
     settings = Settings()
     logger.info("[STARTUP] Initializing NVUE Automation API...")
     logger.info(f"[STARTUP] Connecting to NVUE API | base_url={settings.base_url}")
-    
+
     # 初始化全域非同步客戶端（連線池）
     async_client = httpx.AsyncClient(
         auth=httpx.BasicAuth(settings.username, settings.password),
@@ -89,7 +91,10 @@ def create_app() -> FastAPI:
             content=error_response,
         )
 
+    # Register routers
     app.include_router(api_v1_router)
+    app.include_router(platform.router)
+    app.include_router(system.router)
 
     @app.get("/", tags=["Health Check"])
     async def root():

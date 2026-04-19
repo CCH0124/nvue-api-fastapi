@@ -64,7 +64,9 @@ class AsyncNVUEClient:
             logger.error(f"[HTTP] Network error | method={method} | path={path} | error={str(e)}")
             raise
         except Exception as e:
-            logger.error(f"[HTTP] Unexpected error | method={method} | path={path} | error={type(e).__name__}: {str(e)}")
+            logger.error(
+                f"[HTTP] Unexpected error | method={method} | path={path} | error={type(e).__name__}: {str(e)}"
+            )
             raise
 
     def _extract_error_detail(self, response: httpx.Response) -> dict:
@@ -78,7 +80,6 @@ class AsyncNVUEClient:
     async def _log_request(self, r: httpx.Response):
         """偵錯日誌"""
         logger.debug(f"[HTTP] Request details | method={r.request.method} | url={r.request.url}")
-        logger.debug(f"[HTTP] Request body | body={r.request.content.decode('utf-8') if r.request.content else 'None'}")
         logger.debug(f"[HTTP] Response status | code={r.status_code}")
         if r.text:
             try:

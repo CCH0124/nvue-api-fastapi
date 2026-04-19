@@ -1,12 +1,13 @@
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 from typing import Literal
 
 from pydantic import BaseModel
 from pydantic import Field
+from pydantic import computed_field
 
 
-class RevisionState(str, Enum):
+class RevisionState(StrEnum):
     """
     NVUE Revision states.
     Corresponds to the 'state' field in revision operations.
@@ -20,12 +21,13 @@ class RevisionState(str, Enum):
     CONFIRM_FAIL = "confirm_fail"
     PREVIOUS = "previous"
     DETACHED = "detached"
+    CONFIRM = "confirm"
     CONFIRM_YES = "confirm_yes"
     CONFIRM_NO = "confirm_no"
     SAVE = "save"
 
 
-class SpecialRevisionName(str, Enum):
+class SpecialRevisionName(StrEnum):
     """
     Special revision names used for querying configurations.
     These are predefined revision identifiers in NVUE API.
@@ -51,8 +53,8 @@ class StateControls(BaseModel):
         default=None, description="Control verifying state (skip or call skinny-startup event)"
     )
     readying: Literal["skip"] | None = Field(default=None, description="Skip readying state")
-    confirm: int = Field(
-        default=0,
+    confirm: int | None = Field(
+        default=None,
         ge=0,
         description=(
             "Wait N seconds for user confirmation before finishing. "
@@ -196,6 +198,12 @@ class RollbackRequest(BaseModel):
         return ApplyOptions(message=self.message, state_controls=state_controls)
 
 
+class ConfirmRequest(BaseModel):
+    """Request body for confirm/reject operations"""
+
+    message: str | None = Field(default=None, description="Optional commit message for the confirm/reject operation")
+
+
 class GenericResponse(BaseModel):
     """Unified API response format"""
 
@@ -221,3 +229,54 @@ class ConfigResponse(BaseModel):
 
     path: str | None = Field(default=None, description="NVUE API path")
     data: dict[str, Any]
+
+
+class RevisionInfo(BaseModel):
+    """
+    Revision information returned from NVUE API operations.
+
+    This model wraps the raw NVUE revision response and provides convenient
+    computed properties for commonly accessed fields, eliminating manual
+    dictionary navigation and field extraction.
+
+    Usage:
+        >>> revision_info = RevisionInfo(**raw_response)
+        >>> print(revision_info.rev_id)  # Auto-extracts from changeset_id or last-apply
+        >>> print(revision_info.parent_rev_id)  # Auto-extracts from additional-data
+        >>> data = revision_info.model_dump()  # Excludes internal changeset_id field
+    """
+
+    model_config = {
+        "extra": "allow",  # Preserve all NVUE API fields
+        "populate_by_name": True,  # Allow both snake_case and kebab-case
+    }
+
+    # Core fields
+    state: str = Field(..., description="Current revision state")
+
+    # Optional fields with alias mapping
+    changeset_id: str | None = Field(default=None, exclude=True)  # Internal field for tracking, not serialized
+    last_apply: dict[str, Any] | None = Field(default=None, alias="last-apply", exclude=True)
+    additional_data: dict[str, Any] | None = Field(default=None, alias="additional-data", exclude=True)
+
+    @computed_field
+    @property
+    def rev_id(self) -> str | None:
+        """
+        Revision ID extracted from either changeset_id or last-apply.rev_id.
+
+        Returns:
+            str | None: Revision identifier
+        """
+        return self.changeset_id or (self.last_apply or {}).get("rev_id")
+
+    @computed_field
+    @property
+    def parent_rev_id(self) -> str | None:
+        """
+        Parent revision ID extracted from additional-data.
+
+        Returns:
+            str | None: Parent revision identifier
+        """
+        return (self.additional_data or {}).get("parent-revision-id")
