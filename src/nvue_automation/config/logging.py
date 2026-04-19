@@ -25,6 +25,23 @@ class InterceptHandler(logging.Handler):
         logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
 
 
+def inject_trace_info(record):
+    """
+    trace_id and span_id injection for loguru, 
+    extract from current active span context and inject into log record's extra fields
+    """
+    from opentelemetry import trace
+    span = trace.get_current_span()
+    span_context = span.get_span_context()
+    
+    # check if the span context is valid before extracting trace_id and span_id
+    if span_context.is_valid:
+        record["extra"]["trace_id"] = format(span_context.trace_id, "032x")
+        record["extra"]["span_id"] = format(span_context.span_id, "016x")
+    else:
+        record["extra"]["trace_id"] = "none"
+        record["extra"]["span_id"] = "none"
+
 def setup_logging():
     """
     配置 logging，將所有日誌轉發至 loguru
@@ -32,10 +49,18 @@ def setup_logging():
     # 移除 loguru 的默認 handler
     logger.remove()
 
+    logger.configure(patcher=inject_trace_info)
+
     # 新增自定義的 handler，
     logger.add(
         sys.stdout,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+        format=(
+            "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
+            "<level>{level: <8}</level> | "
+            "<cyan>trace_id={extra[trace_id]}</cyan> | "
+            "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
+            "<level>{message}</level>"
+        ),
         level="DEBUG",
         colorize=True,
     )

@@ -33,6 +33,15 @@ dev = [
     "pytest-mock (>=3.15.1,<4.0.0)",
     "pytest-cov (>=7.1.0,<8.0.0)"
 ]
+observability = [
+    "opentelemetry-api (>=1.41.0,<2.0.0)",
+    "opentelemetry-sdk (>=1.41.0,<2.0.0)",
+    "opentelemetry-exporter-otlp (>=1.41.0,<2.0.0)",
+    "opentelemetry-instrumentation-fastapi (>=0.62b0,<0.63)",
+    "opentelemetry-instrumentation-httpx (>=0.62b0,<0.63)",
+    "opentelemetry-exporter-prometheus (>=0.62b0,<0.63)",
+    "opentelemetry-semantic-conventions (>=0.62b0,<0.63)"
+]
 
 [tool.ruff]
 exclude = [

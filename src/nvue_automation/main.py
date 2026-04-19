@@ -1,8 +1,9 @@
 from contextlib import asynccontextmanager
-
+import os
 import httpx
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest, start_http_server
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -14,6 +15,20 @@ from nvue_automation.api.v1.resources import system
 from nvue_automation.config.logging import setup_logging
 from nvue_automation.config.settings import Settings
 from nvue_automation.core.exceptions import NVUEAPIError
+
+
+from opentelemetry import trace, metrics
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry import metrics
+from opentelemetry.exporter.prometheus import PrometheusMetricReader
+
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 
 
 @asynccontextmanager
@@ -46,6 +61,31 @@ async def lifespan(app: FastAPI):
     await async_client.aclose()
     logger.warning("[SHUTDOWN] NVUE connection pool closed successfully")
 
+def setup_otlp(app: FastAPI, settings: Settings):
+    import platform
+
+    resource = Resource.create({
+        "service.name": settings.otel_service_name,
+        "service.version": settings.otel_service_version,
+        "service.instance.id": platform.node(),
+        "service.enviroment": os.getenv("ENVIRONMENT", "development"),
+    })
+    
+    # 設定 Tracer Provider 與 Exporter
+    tracer_provider = TracerProvider(resource=resource)
+    otlp_exporter = OTLPSpanExporter(endpoint=settings.otel_exporter_otlp_endpoint)
+    # ConsoleSpanExporter 作為演示，生產環境可換成 OTLPSpanExporter
+    tracer_provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
+    trace.set_tracer_provider(tracer_provider)
+
+    # Metrics
+    metric_reader = PrometheusMetricReader()
+    meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
+    metrics.set_meter_provider(meter_provider)
+
+    FastAPIInstrumentor.instrument_app(app)
+    HTTPXClientInstrumentor().instrument()
+
 
 def create_app() -> FastAPI:
 
@@ -57,6 +97,10 @@ def create_app() -> FastAPI:
         version="1.1.0",
         lifespan=lifespan,  # 註冊生命週期管理
     )
+
+    # setup OTLP
+    settings = Settings()
+    setup_otlp(app, settings)
 
     app.add_middleware(
         CORSMiddleware,
@@ -96,9 +140,14 @@ def create_app() -> FastAPI:
     app.include_router(platform.router)
     app.include_router(system.router)
 
-    @app.get("/", tags=["Health Check"])
+    @app.get("/healthcheck", tags=["Health Check"])
     async def root():
         return {"status": "online", "mode": "lifespan_managed"}
+    
+    @app.get("/metrics", tags=["Observability"])
+    async def metrics():
+        # generate_latest 會從 Prometheus 預設註冊表中抓取 OTel 寫入的所有數據
+        return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     return app
 
@@ -107,7 +156,6 @@ app = create_app()
 
 
 def start():
-    """封裝啟動邏輯，供 Poetry script 呼叫"""
     logger.info("[STARTUP] Starting NVUE Automation API server...")
     logger.info("[STARTUP] Server configuration | host=0.0.0.0 | port=8000 | reload=True")
     uvicorn.run(
