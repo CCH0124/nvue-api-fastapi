@@ -7,7 +7,7 @@ from loguru import logger
 
 from nvue_automation.core.client import AsyncNVUEClient
 from nvue_automation.core.exceptions import ConfigurationError
-from nvue_automation.core.trace import trace_span_attributes
+from nvue_automation.core.trace import add_span_attributes, trace_span_attributes
 from nvue_automation.models.schemas import ApplyOptions
 from nvue_automation.models.schemas import AutoPrompt
 from nvue_automation.models.schemas import RevisionInfo
@@ -37,7 +37,7 @@ class AsyncNVUEService:
         self.client = client
         self.settings = client.settings
     
-    @trace_span_attributes(revision_id="changeset")
+
     async def create_revision(self) -> str:
         """
         Create a new NVUE revision in pending state.
@@ -475,13 +475,20 @@ class AsyncNVUEService:
 
             # Ensure changeset ID is included in the response
             revision_info["changeset_id"] = changeset
+            add_span_attributes(
+                event_name="merge",
+                revision=changeset,
+            )
             return RevisionInfo(**revision_info)
         except Exception as e:
             logger.error(
                 f"[MERGE] ✗ Config merge failed | path={path} | changeset={changeset} | error={type(e).__name__}: {str(e)}"
             )
             raise
-
+    @trace_span_attributes(
+        event_name="rollback", 
+        revision="changeset"
+    )
     async def config_rollback(
         self,
         changeset: str,
@@ -840,7 +847,10 @@ class AsyncNVUEService:
 
         logger.info(f"[{log_prefix}] Operation completed successfully | changeset={changeset}")
         return RevisionInfo(**result)
-
+    @trace_span_attributes(
+        event_name="apply",
+        revision="changeset"
+    )
     async def config_save(self, changeset: str, message: str | None = None) -> RevisionInfo:
         """
         Save applied configuration to startup (persist across reboots) or confirm pending apply.
@@ -898,7 +908,10 @@ class AsyncNVUEService:
             target_state=RevisionState.SAVE,
             message=message,
         )
-
+    @trace_span_attributes(
+        event_name="confirm",
+        revision="changeset"
+    )
     async def config_confirm(self, changeset: str, message: str | None = None) -> RevisionInfo:
         """
         Confirm a pending configuration that was applied with confirm timeout.
@@ -942,7 +955,10 @@ class AsyncNVUEService:
             target_state=RevisionState.CONFIRM_YES,
             message=message,
         )
-
+    @trace_span_attributes(
+        event_name="reject",
+        revision="changeset"
+    )
     async def config_reject(self, changeset: str, message: str | None = None) -> RevisionInfo:
         """
         Reject a pending configuration that was applied with confirm timeout.
