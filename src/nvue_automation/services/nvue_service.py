@@ -7,6 +7,7 @@ from loguru import logger
 
 from nvue_automation.core.client import AsyncNVUEClient
 from nvue_automation.core.exceptions import ConfigurationError
+from nvue_automation.core.trace import trace_span_attributes
 from nvue_automation.models.schemas import ApplyOptions
 from nvue_automation.models.schemas import AutoPrompt
 from nvue_automation.models.schemas import RevisionInfo
@@ -35,7 +36,8 @@ class AsyncNVUEService:
         """
         self.client = client
         self.settings = client.settings
-
+    
+    @trace_span_attributes(revision_id="changeset")
     async def create_revision(self) -> str:
         """
         Create a new NVUE revision in pending state.

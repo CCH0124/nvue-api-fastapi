@@ -30,6 +30,8 @@ from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 
+from nvue_automation.core.trace import TracingHeaderMiddleware
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -55,7 +57,14 @@ async def lifespan(app: FastAPI):
         f"timeout={30.0}s | verify_ssl=False"
     )
 
+    tp, _, _ = setup_otlp(app, settings)
+
     yield  # 這裡程式會開始執行並等待請求
+
+    if tp:
+        logger.info("[SHUTDOWN] Shutting down OpenTelemetry TracerProvider...")
+        tp.shutdown()
+        logger.warning("[SHUTDOWN] OpenTelemetry TracerProvider shutdown complete")
 
     logger.info("[SHUTDOWN] Closing NVUE connection pool...")
     await async_client.aclose()
@@ -86,6 +95,8 @@ def setup_otlp(app: FastAPI, settings: Settings):
     FastAPIInstrumentor.instrument_app(app)
     HTTPXClientInstrumentor().instrument()
 
+    return tracer_provider, metric_reader, otlp_exporter
+
 
 def create_app() -> FastAPI:
 
@@ -97,11 +108,7 @@ def create_app() -> FastAPI:
         version="1.1.0",
         lifespan=lifespan,  # 註冊生命週期管理
     )
-
-    # setup OTLP
-    settings = Settings()
-    setup_otlp(app, settings)
-
+    app.add_middleware(TracingHeaderMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
